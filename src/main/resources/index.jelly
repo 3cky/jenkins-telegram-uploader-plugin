@@ -1,0 +1,4 @@
+<?jelly escape-by-default='true'?>
+<div>
+    This plugin will allow you to publish the artifacts to Telegram chats.
+</div>

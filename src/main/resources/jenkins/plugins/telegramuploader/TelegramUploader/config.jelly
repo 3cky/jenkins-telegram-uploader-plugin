@@ -1,0 +1,30 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core"
+         xmlns:st="jelly:stapler"
+         xmlns:f="/lib/form">
+
+    <f:entry title="Chat ID" field="chatId">
+        <f:textbox />
+    </f:entry>
+
+    <f:advanced>
+
+        <f:entry title="Caption" field="caption">
+            <f:textbox default="" />
+        </f:entry>
+
+        <f:entry title="Filter" field="filter">
+            <f:textbox default="**" />
+        </f:entry>
+
+        <f:entry title="Disable notification" field="silent">
+            <f:checkbox default="false" />
+        </f:entry>
+
+        <f:entry title="Fail build if upload is failed" field="failBuildIfUploadFailed">
+            <f:checkbox default="false" />
+        </f:entry>
+
+    </f:advanced>
+
+</j:jelly>
