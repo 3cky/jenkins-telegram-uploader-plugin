@@ -29,16 +29,26 @@ package jenkins.plugins.telegramuploader;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.List;
+import java.net.URI;
 
-import org.apache.commons.httpclient.HttpClient;
-import org.apache.commons.httpclient.HttpException;
-import org.apache.commons.httpclient.methods.PostMethod;
-import org.apache.commons.httpclient.methods.multipart.FilePart;
-import org.apache.commons.httpclient.methods.multipart.MultipartRequestEntity;
-import org.apache.commons.httpclient.methods.multipart.Part;
-import org.apache.commons.httpclient.methods.multipart.StringPart;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpHost;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.CredentialsProvider;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.ResponseHandler;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.client.methods.RequestBuilder;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.mime.HttpMultipartMode;
+import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.impl.client.BasicCredentialsProvider;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
@@ -168,10 +178,6 @@ public class TelegramUploader extends Notifier {
             return failResult;
         }
 
-        TelegramUploaderDescriptor descriptor = getDescriptor();
-
-        HttpClient httpClient = new HttpClient();
-
         String expandedCaption = Util.fixEmptyAndTrim(this.caption);
         if (expandedCaption != null) {
             try {
@@ -184,62 +190,116 @@ public class TelegramUploader extends Notifier {
             }
         }
 
-        for (String artifact : artifacts) {
-            VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
-            File artifactFile = new File(artifactVirtualFile.toURI());
-            logger.println("Uploading artifact '" + artifact +
-                    "' to the Telegram chat " + this.chatId);
+        TelegramUploaderDescriptor descriptor = getDescriptor();
+
+        HttpHost httpProxy = null;
+
+        CredentialsProvider httpProxyCredsProvider = new BasicCredentialsProvider();
+
+        String httpProxyUri = descriptor.getHttpProxyUri();
+        if (httpProxyUri != null && !httpProxyUri.isEmpty()) {
             try {
-                String response = sendFile(httpClient, descriptor.getBotToken(),
-                        expandedCaption, artifactFile);
-                if (response.indexOf("\"ok\":true") < 0) {
-                    logger.println("Error while uploading artifact '" + artifact +
-                            "' to Telegram chat " + this.chatId + ", response: " + response);
-                    return failResult;
+                URI proxyUri = URI.create(httpProxyUri);
+                httpProxy = new HttpHost(proxyUri.getHost(), proxyUri.getPort(),
+                        proxyUri.getScheme());
+                String httpProxyUser = descriptor.getHttpProxyUser();
+                if (httpProxyUser != null && !httpProxyUser.trim().isEmpty()) {
+                    httpProxyCredsProvider.setCredentials(
+                            new AuthScope(proxyUri.getHost(), proxyUri.getPort()),
+                            new UsernamePasswordCredentials(httpProxyUser.trim(),
+                                    descriptor.getHttpProxyPassword()));
                 }
             } catch (Exception e) {
-                logger.println("Can't upload artifact '" + artifactFile +
-                        "' to the Telegram, see error below:");
+                logger.println("Can't set up HTTP proxy, see error below:");
                 e.printStackTrace(logger);
                 return failResult;
             }
         }
 
+        try (CloseableHttpClient httpClient = HttpClients.custom()
+                .setDefaultCredentialsProvider(httpProxyCredsProvider).build()) {
+            for (String artifact : artifacts) {
+                VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
+                File artifactFile = new File(artifactVirtualFile.toURI());
+                logger.println("Uploading artifact '" + artifact + "' to the Telegram chat "
+                        + this.chatId);
+                try {
+                    String response = sendFile(httpClient, httpProxy, descriptor.getBotToken(),
+                            expandedCaption, artifactFile);
+                    if (response.indexOf("\"ok\":true") < 0) {
+                        logger.println("Error while uploading artifact '" + artifact
+                                + "' to Telegram chat " + this.chatId + ", response: " + response);
+                        return failResult;
+                    }
+                } catch (Exception e) {
+                    logger.println("Can't upload artifact '" + artifactFile
+                            + "' to the Telegram, see error below:");
+                    e.printStackTrace(logger);
+                    return failResult;
+                }
+            }
+        } catch (IOException ioe) {
+            // Ignore httpClient.close() IOException
+        }
+
         return true;
     }
 
-    public String sendFile(HttpClient httpClient, String token, String fileCaption, File file)
-            throws HttpException, IOException {
-        List<Part> parts = new ArrayList<>();
+    public String sendFile(HttpClient httpClient, HttpHost httpProxy,
+            String token, String fileCaption, File file) throws IOException {
+        // Build multipart upload request
+        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+        builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
 
-        parts.add(new StringPart("chat_id", this.chatId, "utf-8"));
-        parts.add(new FilePart("document", file));
+        // Add parts to multipart request
+        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
 
         if (this.silent) {
-            parts.add(new StringPart("disable_notification", "true", "utf-8"));
+            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_BINARY);
         }
 
         if (fileCaption != null && !fileCaption.isEmpty()) {
-            parts.add(new StringPart("caption", fileCaption, "utf-8"));
+            builder.addTextBody("caption", fileCaption, ContentType.DEFAULT_BINARY);
         }
 
-        PostMethod postMethod = new PostMethod(String.format(
-                "https://api.telegram.org/bot%s/sendDocument", token));
+        builder.addBinaryBody("document", file, ContentType.DEFAULT_BINARY, file.getName());
 
-        MultipartRequestEntity multipartRequestEntity = new MultipartRequestEntity(
-                parts.toArray(new Part[parts.size()]), postMethod.getParams());
+        HttpEntity data = builder.build();
 
-        postMethod.setRequestEntity(multipartRequestEntity);
+        // Build HTTP request and assign multipart upload data
+        RequestConfig requestConfig = (httpProxy == null) ? RequestConfig.DEFAULT :
+            RequestConfig.custom().setProxy(httpProxy).build();
+        HttpUriRequest request = RequestBuilder
+                .post(String.format("https://api.telegram.org/bot%s/sendDocument", token))
+                .setEntity(data)
+                .setConfig(requestConfig)
+                .build();
 
-        httpClient.executeMethod(postMethod);
+        // Create a custom response handler
+        ResponseHandler<String> responseHandler = response -> {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode >= 200 && statusCode < 300) {
+                HttpEntity entity = response.getEntity();
+                return entity != null ? EntityUtils.toString(entity) : null;
+            }
+            String status = Integer.toString(statusCode);
+            String reason = response.getStatusLine().getReasonPhrase();
+            if (reason != null) {
+                status += " (" + reason + ")";
+            }
+            throw new ClientProtocolException("Unexpected response status: " + status);
+        };
 
-        return postMethod.getResponseBodyAsString();
+        return httpClient.execute(request, responseHandler);
     }
 
     @Extension
     public static final class TelegramUploaderDescriptor extends BuildStepDescriptor<Publisher> {
 
         private String botToken;
+        private String httpProxyUri;
+        private String httpProxyUser;
+        private String httpProxyPassword;
 
         public TelegramUploaderDescriptor() {
             load();
@@ -272,16 +332,43 @@ public class TelegramUploader extends Notifier {
             return FormValidation.ok();
         }
 
+        public FormValidation doCheckHttpProxyUri(@QueryParameter String value) {
+            if (!value.isEmpty()) {
+                try {
+                    URI.create(value);
+                } catch (Exception e) {
+                    return FormValidation.error("Invalid HTTP proxy URI: %s", e.getMessage());
+                }
+            }
+
+            return FormValidation.ok();
+        }
+
         @Override
         public boolean configure(StaplerRequest req, JSONObject json) throws FormException {
             JSONObject config = json.getJSONObject("telegram-uploader");
             this.botToken = config.getString("botToken");
+            this.httpProxyUri = config.getString("httpProxyUri");
+            this.httpProxyUser = config.getString("httpProxyUser");
+            this.httpProxyPassword = config.getString("httpProxyPassword");
             save();
             return true;
         }
 
         public String getBotToken() {
             return botToken;
+        }
+
+        public String getHttpProxyUri() {
+            return httpProxyUri;
+        }
+
+        public String getHttpProxyUser() {
+            return httpProxyUser;
+        }
+
+        public String getHttpProxyPassword() {
+            return httpProxyPassword;
         }
     }
 

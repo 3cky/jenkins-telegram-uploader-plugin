@@ -8,6 +8,22 @@
       <f:textbox />
     </f:entry>
 
+    <f:advanced>
+
+        <f:entry title="HTTP Proxy URI" field="httpProxyUri">
+          <f:textbox />
+        </f:entry>
+
+        <f:entry title="HTTP Proxy User" field="httpProxyUser">
+          <f:textbox />
+        </f:entry>
+
+        <f:entry title="HTTP Proxy Password" field="httpProxyPassword">
+          <f:password />
+        </f:entry>
+
+    </f:advanced>
+
   </f:section>
 
 </j:jelly>
