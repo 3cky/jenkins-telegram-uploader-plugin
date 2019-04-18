@@ -49,29 +49,34 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
+import hudson.AbortException;
 import hudson.Extension;
+import hudson.FilePath;
 import hudson.Launcher;
 import hudson.Util;
-import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
-import hudson.model.BuildListener;
 import hudson.model.Result;
+import hudson.model.Run;
+import hudson.model.TaskListener;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
 import hudson.tasks.Publisher;
 import hudson.util.FormValidation;
+import jenkins.tasks.SimpleBuildStep;
 import jenkins.util.VirtualFile;
 import net.sf.json.JSONObject;
 
 /**
  * @author Victor Antonovich (v.antonovich@gmail.com)
  */
-public class TelegramUploader extends Notifier {
+public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
     private String chatId;
     private String caption;
@@ -80,13 +85,9 @@ public class TelegramUploader extends Notifier {
     private boolean failBuildIfUploadFailed;
 
     @DataBoundConstructor
-    public TelegramUploader(String chatId, String caption, String filter, boolean silent,
-            boolean failBuildIfUploadFailed) {
+    public TelegramUploader(String chatId, String filter) {
         this.chatId = chatId;
         this.filter = filter;
-        this.caption = caption;
-        this.silent = silent;
-        this.failBuildIfUploadFailed = failBuildIfUploadFailed;
     }
 
     public String getChatId() {
@@ -109,6 +110,7 @@ public class TelegramUploader extends Notifier {
         return caption;
     }
 
+    @DataBoundSetter
     public void setCaption(String caption) {
         this.caption = caption;
     }
@@ -117,6 +119,7 @@ public class TelegramUploader extends Notifier {
         return silent;
     }
 
+    @DataBoundSetter
     public void setSilent(boolean silent) {
         this.silent = silent;
     }
@@ -125,6 +128,7 @@ public class TelegramUploader extends Notifier {
         return failBuildIfUploadFailed;
     }
 
+    @DataBoundSetter
     public void setFailBuildIfUploadFailed(boolean failBuildIfUploadFailed) {
         this.failBuildIfUploadFailed = failBuildIfUploadFailed;
     }
@@ -139,23 +143,16 @@ public class TelegramUploader extends Notifier {
         return (TelegramUploaderDescriptor) super.getDescriptor();
     }
 
-    @SuppressWarnings("rawtypes")
     @Override
-    public boolean perform(AbstractBuild build, Launcher launcher, BuildListener listener) {
+    public void perform(Run<?, ?> build, FilePath workspace, Launcher launcher, TaskListener listener)
+            throws InterruptedException, IOException {
         PrintStream logger = listener.getLogger();
-
-        boolean failResult = !this.failBuildIfUploadFailed;
 
         Result buildResult = build.getResult();
 
-        if (buildResult == null) {
-            logger.println("Skipping artifacts uploading to the Telegram because no build result found");
-            return failResult;
-        }
-
-        if (buildResult.isWorseOrEqualTo(Result.FAILURE)) {
+        if (buildResult != null && buildResult.isWorseOrEqualTo(Result.FAILURE)) {
             logger.println("Skipping artifacts uploading to the Telegram because of build failure");
-            return failResult;
+            return;
         }
 
         String artifactsGlob = Util.fixEmptyAndTrim(this.filter);
@@ -168,14 +165,13 @@ public class TelegramUploader extends Notifier {
         try {
             artifacts = artifactsRoot.list(artifactsGlob);
         } catch (IOException e) {
-            logger.println("Can't get artifacts list to upload to the Telegram, see error below:");
-            e.printStackTrace(logger);
-            return failResult;
+            fail(logger, "Can't list artifacts: " + e.getMessage());
+            return;
         }
 
         if (artifacts.length == 0) {
-            logger.println("No files are matched by given filter found for upload to the Telegram");
-            return failResult;
+            fail(logger, "No artifacts are matched by given filter for upload");
+            return;
         }
 
         String expandedCaption = Util.fixEmptyAndTrim(this.caption);
@@ -183,10 +179,9 @@ public class TelegramUploader extends Notifier {
             try {
                 expandedCaption = build.getEnvironment(listener).expand(expandedCaption);
             } catch (Exception e) {
-                logger.println("Can't expand Telegram document caption '" + expandedCaption +
-                        "', see error below:");
-                e.printStackTrace(logger);
-                return failResult;
+                fail(logger, "Can't expand document caption '" + expandedCaption +
+                        "': " + e.getMessage());
+                return;
             }
         }
 
@@ -210,9 +205,8 @@ public class TelegramUploader extends Notifier {
                                     descriptor.getHttpProxyPassword()));
                 }
             } catch (Exception e) {
-                logger.println("Can't set up HTTP proxy, see error below:");
-                e.printStackTrace(logger);
-                return failResult;
+                fail(logger, "Can't set up HTTP proxy: " + e.getMessage());
+                return;
             }
         }
 
@@ -227,22 +221,26 @@ public class TelegramUploader extends Notifier {
                     String response = sendFile(httpClient, httpProxy, descriptor.getBotToken(),
                             expandedCaption, artifactFile);
                     if (response.indexOf("\"ok\":true") < 0) {
-                        logger.println("Error while uploading artifact '" + artifact
+                        fail(logger, "Error while uploading artifact '" + artifact
                                 + "' to Telegram chat " + this.chatId + ", response: " + response);
-                        return failResult;
+                        return;
                     }
                 } catch (Exception e) {
-                    logger.println("Can't upload artifact '" + artifactFile
-                            + "' to the Telegram, see error below:");
-                    e.printStackTrace(logger);
-                    return failResult;
+                    fail(logger, "Can't upload artifact '" + artifactFile
+                            + "' to the Telegram: " + e.getMessage());
+                    return;
                 }
             }
         } catch (IOException ioe) {
             // Ignore httpClient.close() IOException
         }
+    }
 
-        return true;
+    private void fail(PrintStream logger, String message) throws AbortException {
+        if (this.failBuildIfUploadFailed) {
+            throw new AbortException(message);
+        }
+        logger.println(message);
     }
 
     public String sendFile(HttpClient httpClient, HttpHost httpProxy,
@@ -293,6 +291,7 @@ public class TelegramUploader extends Notifier {
         return httpClient.execute(request, responseHandler);
     }
 
+    @Symbol("telegramUploader")
     @Extension
     public static final class TelegramUploaderDescriptor extends BuildStepDescriptor<Publisher> {
 
