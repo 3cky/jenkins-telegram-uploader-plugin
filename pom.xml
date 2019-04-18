@@ -10,7 +10,7 @@
     </parent>
 
     <artifactId>telegram-uploader</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0</version>
     <packaging>hpi</packaging>
 
     <properties>
@@ -38,7 +38,8 @@
         <connection>scm:git:git://github.com/3cky/${project.artifactId}-plugin.git</connection>
         <developerConnection>scm:git:git@github.com:3cky/${project.artifactId}-plugin.git</developerConnection>
         <url>https://github.com/3cky/${project.artifactId}-plugin</url>
-    </scm>
+      <tag>telegram-uploader-1.0</tag>
+  </scm>
 
     <repositories>
         <repository>
