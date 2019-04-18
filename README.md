@@ -7,7 +7,7 @@ A Jenkins post-build uploader plugin that uploads artifacts generated during bui
 ### Installing
 
 1. Create a [Telegram bot](https://core.telegram.org/bots#3-how-do-i-create-a-bot) and obtain its token.
-2. Download [latest release](https://github.com/3cky/jenkins-telegram-uploader-plugin/releases) of the plugin and install it into your Jenkins ("Manage Jenkins"->"Plugin Manager"->"Advanced"->"Upload Plugin").
+2. Download .hpi file for [latest release](https://github.com/3cky/jenkins-telegram-uploader-plugin/releases) of the plugin and install it into your Jenkins ("Manage Jenkins"->"Plugin Manager"->"Advanced"->"Upload Plugin").
 3. Configure bot token in Jenkins system settings ("Manage Jenkins"->"Configure System"->"Telegram Uploader").
 
 ### Freestyle job
