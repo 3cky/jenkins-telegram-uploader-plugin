@@ -5,7 +5,7 @@
   <f:section title="Telegram Uploader" name="telegram-uploader">
 
     <f:entry title="Bot Token" field="botToken">
-      <f:textbox />
+      <f:password />
     </f:entry>
 
     <f:advanced>
