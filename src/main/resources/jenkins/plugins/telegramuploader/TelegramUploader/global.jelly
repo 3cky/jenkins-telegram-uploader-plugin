@@ -22,6 +22,9 @@
           <f:password />
         </f:entry>
 
+        <f:validateButton method="testConnection" title="Test Connection"
+            with="botToken,httpProxyUri,httpProxyUser,httpProxyPassword" />
+
     </f:advanced>
 
   </f:section>
