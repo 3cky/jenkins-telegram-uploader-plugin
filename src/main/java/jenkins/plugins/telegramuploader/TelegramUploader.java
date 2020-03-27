@@ -30,6 +30,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.net.URI;
+import java.net.URL;
+import java.nio.file.Paths;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
@@ -89,6 +91,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     private String filter;
     private boolean silent;
     private boolean failBuildIfUploadFailed;
+    private boolean sendLinkIfUploadSizeLimitExceeded;
 
     @DataBoundConstructor
     public TelegramUploader(String chatId, String filter) {
@@ -137,6 +140,11 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     @DataBoundSetter
     public void setFailBuildIfUploadFailed(boolean failBuildIfUploadFailed) {
         this.failBuildIfUploadFailed = failBuildIfUploadFailed;
+    }
+
+    @DataBoundSetter
+    public void setSendLinkIfUploadSizeLimitExceeded(boolean sendLinkIfUploadSizeLimitExceeded) {
+        this.sendLinkIfUploadSizeLimitExceeded = sendLinkIfUploadSizeLimitExceeded;
     }
 
     @Override
@@ -205,30 +213,58 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                 descriptor.getHttpProxyUser(), descriptor.getHttpProxyPassword())) {
             for (String artifact : artifacts) {
                 VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
+                // Check for Telegram upload file size limit (50 MB for now)
                 if (artifactVirtualFile.length() > SEND_FILE_SIZE_LIMIT) {
-                    doFailAction(logger, "Can't upload artifact '" + artifactVirtualFile
-                            + "' to the Telegram: file is too big: "
-                            + Functions.humanReadableByteSize(artifactVirtualFile.length())
-                            + ", upload file size limit is: "
-                            + Functions.humanReadableByteSize(SEND_FILE_SIZE_LIMIT));
-                    continue;
-                }
-                File artifactFile = new File(artifactVirtualFile.toURI());
-                logger.println("Uploading artifact '" + artifact + "' to the Telegram chat "
-                        + this.chatId);
-                try {
-                    String response = sendTelegramFile(httpClient, httpProxy,
-                            descriptor.getBotToken(), expandedCaption, artifactFile);
-                    if (!isTelegramResponseOk(response)) {
-                        doFailAction(logger, "Error while uploading artifact '" + artifact
-                                + "' to Telegram chat " + this.chatId + ", response: " + response);
+                    // Choose action for file exceeded this limit
+                    if (sendLinkIfUploadSizeLimitExceeded) {
+                        // Send link to the artifact instead of file itself
+                        URL artifactUrl = new URL(build.getParent().getAbsoluteUrl()
+                                + build.getNumber() + "/artifact/" + artifact);
+                        logger.println("Uploading artifact link '" + artifactUrl
+                                + "' to Telegram chat " + this.chatId);
+                        try {
+                            String response = sendTelegramLink(httpClient, httpProxy,
+                                    descriptor.getBotToken(), expandedCaption, artifactUrl,
+                                    artifactVirtualFile.length());
+                            if (!isTelegramResponseOk(response)) {
+                                doFailAction(logger, "Error while uploading artifact link '"
+                                        + artifactUrl + "' to Telegram chat " + this.chatId
+                                        + ", response: " + response);
+                                continue;
+                            }
+                        } catch (AbortException ae) {
+                            throw ae;
+                        } catch (Exception e) {
+                            doFailAction(logger, "Can't upload artifact link '" + artifactUrl
+                                    + "' to Telegram chat " + this.chatId + ": " + e.getMessage());
+                        }
+                    } else {
+                        // File limit exceeded, do fail action
+                        doFailAction(logger, "Can't upload artifact '" + artifactVirtualFile
+                                + "' to the Telegram: file is too big: "
+                                + Functions.humanReadableByteSize(artifactVirtualFile.length())
+                                + ", upload file size limit is: "
+                                + Functions.humanReadableByteSize(SEND_FILE_SIZE_LIMIT));
                         continue;
                     }
-                } catch (AbortException ae) {
-                    throw ae;
-                } catch (Exception e) {
-                    doFailAction(logger, "Can't upload artifact '" + artifactFile
-                            + "' to the Telegram: " + e.getMessage());
+                } else {
+                    File artifactFile = new File(artifactVirtualFile.toURI());
+                    logger.println("Uploading artifact '" + artifact + "' to the Telegram chat "
+                            + this.chatId);
+                    try {
+                        String response = sendTelegramFile(httpClient, httpProxy,
+                                descriptor.getBotToken(), expandedCaption, artifactFile);
+                        if (!isTelegramResponseOk(response)) {
+                            doFailAction(logger, "Error while uploading artifact '" + artifact
+                                    + "' to Telegram chat " + this.chatId + ", response: " + response);
+                            continue;
+                        }
+                    } catch (AbortException ae) {
+                        throw ae;
+                    } catch (Exception e) {
+                        doFailAction(logger, "Can't upload artifact '" + artifactFile
+                                + "' to Telegram chat " + this.chatId + ": " + e.getMessage());
+                    }
                 }
             }
         } catch (AbortException ae) {
@@ -299,6 +335,32 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                 .setConfig(requestConfig)
                 .build();
         return httpClient.execute(request, getHttpResponseHandler());
+    }
+
+    public String sendTelegramLink(HttpClient httpClient, HttpHost httpProxy,
+            String botToken, String linkCaption, URL link, long size)
+                    throws IOException {
+        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+        builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+
+        String text = String.format("[%s](%s) (%s)", Paths.get(link.getPath()).getFileName(),
+                link.toExternalForm(), Functions.humanReadableByteSize(size));
+        if (linkCaption != null && !linkCaption.isEmpty()) {
+            text += "\n\n" + linkCaption;
+        }
+
+        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
+        builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
+        builder.addTextBody("text", text, ContentType.DEFAULT_BINARY);
+        builder.addTextBody("disable_web_page_preview", "true", ContentType.DEFAULT_BINARY);
+
+        if (this.silent) {
+            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_BINARY);
+        }
+
+        HttpEntity data = builder.build();
+
+        return sendTelegramRequest(httpClient, httpProxy, botToken, "sendMessage", data);
     }
 
     public String sendTelegramFile(HttpClient httpClient, HttpHost httpProxy,

@@ -25,6 +25,10 @@
             <f:checkbox default="false" />
         </f:entry>
 
+        <f:entry title="Send link if upload file size limit exceeded" field="sendLinkIfUploadSizeLimitExceeded">
+            <f:checkbox default="false" />
+        </f:entry>
+
     </f:advanced>
 
 </j:jelly>
