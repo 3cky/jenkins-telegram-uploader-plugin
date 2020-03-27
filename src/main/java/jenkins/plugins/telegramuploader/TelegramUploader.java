@@ -80,6 +80,9 @@ import net.sf.json.JSONObject;
  * @author Victor Antonovich (v.antonovich@gmail.com)
  */
 public class TelegramUploader extends Notifier implements SimpleBuildStep {
+    // 50 MB file size limit for sendDocument bot method
+    // (https://core.telegram.org/bots/api#sending-files)
+    private final static long SEND_FILE_SIZE_LIMIT = 50 * 1024 * 1024;
 
     private String chatId;
     private String caption;
@@ -168,12 +171,12 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         try {
             artifacts = artifactsRoot.list(artifactsGlob);
         } catch (IOException e) {
-            fail(logger, "Can't list artifacts: " + e.getMessage());
+            doFailAction(logger, "Can't list artifacts: " + e.getMessage());
             return;
         }
 
         if (artifacts.length == 0) {
-            fail(logger, "No artifacts are matched by given filter for upload");
+            doFailAction(logger, "No artifacts are matched by given filter for upload");
             return;
         }
 
@@ -182,7 +185,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             try {
                 expandedCaption = build.getEnvironment(listener).expand(expandedCaption);
             } catch (Exception e) {
-                fail(logger, "Can't expand document caption '" + expandedCaption +
+                doFailAction(logger, "Can't expand document caption '" + expandedCaption +
                         "': " + e.getMessage());
                 return;
             }
@@ -194,7 +197,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         try {
             httpProxy = getHttpProxy(descriptor.getHttpProxyUri());
         } catch (Exception e) {
-            fail(logger, "Can't set up HTTP proxy: " + e.getMessage());
+            doFailAction(logger, "Can't set up HTTP proxy: " + e.getMessage());
             return;
         }
 
@@ -202,6 +205,14 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                 descriptor.getHttpProxyUser(), descriptor.getHttpProxyPassword())) {
             for (String artifact : artifacts) {
                 VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
+                if (artifactVirtualFile.length() > SEND_FILE_SIZE_LIMIT) {
+                    doFailAction(logger, "Can't upload artifact '" + artifactVirtualFile
+                            + "' to the Telegram: file is too big: "
+                            + Functions.humanReadableByteSize(artifactVirtualFile.length())
+                            + ", upload file size limit is: "
+                            + Functions.humanReadableByteSize(SEND_FILE_SIZE_LIMIT));
+                    continue;
+                }
                 File artifactFile = new File(artifactVirtualFile.toURI());
                 logger.println("Uploading artifact '" + artifact + "' to the Telegram chat "
                         + this.chatId);
@@ -209,22 +220,25 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                     String response = sendTelegramFile(httpClient, httpProxy,
                             descriptor.getBotToken(), expandedCaption, artifactFile);
                     if (!isTelegramResponseOk(response)) {
-                        fail(logger, "Error while uploading artifact '" + artifact
+                        doFailAction(logger, "Error while uploading artifact '" + artifact
                                 + "' to Telegram chat " + this.chatId + ", response: " + response);
-                        return;
+                        continue;
                     }
+                } catch (AbortException ae) {
+                    throw ae;
                 } catch (Exception e) {
-                    fail(logger, "Can't upload artifact '" + artifactFile
+                    doFailAction(logger, "Can't upload artifact '" + artifactFile
                             + "' to the Telegram: " + e.getMessage());
-                    return;
                 }
             }
+        } catch (AbortException ae) {
+            throw ae;
         } catch (IOException ioe) {
             // Ignore httpClient.close() IOException
         }
     }
 
-    private void fail(PrintStream logger, String message) throws AbortException {
+    private void doFailAction(PrintStream logger, String message) throws AbortException {
         if (this.failBuildIfUploadFailed) {
             throw new AbortException(message);
         }
