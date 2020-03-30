@@ -142,6 +142,10 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         this.failBuildIfUploadFailed = failBuildIfUploadFailed;
     }
 
+    public boolean isSendLinkIfUploadSizeLimitExceeded() {
+        return sendLinkIfUploadSizeLimitExceeded;
+    }
+
     @DataBoundSetter
     public void setSendLinkIfUploadSizeLimitExceeded(boolean sendLinkIfUploadSizeLimitExceeded) {
         this.sendLinkIfUploadSizeLimitExceeded = sendLinkIfUploadSizeLimitExceeded;
