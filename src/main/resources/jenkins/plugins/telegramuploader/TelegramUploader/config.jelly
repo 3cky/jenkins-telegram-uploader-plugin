@@ -10,7 +10,7 @@
     <f:advanced>
 
         <f:entry title="Caption" field="caption">
-            <f:textbox default="" />
+            <f:expandableTextbox />
         </f:entry>
 
         <f:entry title="Filter" field="filter">

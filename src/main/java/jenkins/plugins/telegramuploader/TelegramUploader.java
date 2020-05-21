@@ -31,7 +31,11 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.URI;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.file.Paths;
+import java.util.Iterator;
+
+import javax.annotation.Nonnull;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
@@ -59,15 +63,19 @@ import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
 import hudson.AbortException;
+import hudson.EnvVars;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.Functions;
 import hudson.Launcher;
 import hudson.Util;
+import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.Result;
 import hudson.model.Run;
 import hudson.model.TaskListener;
+import hudson.scm.ChangeLogSet;
+import hudson.scm.ChangeLogSet.Entry;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
@@ -85,6 +93,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     // 50 MB file size limit for sendDocument bot method
     // (https://core.telegram.org/bots/api#sending-files)
     private final static long SEND_FILE_SIZE_LIMIT = 50 * 1024 * 1024;
+
+    // sendDocument method document caption size limit
+    // (https://core.telegram.org/bots/api#senddocument)
+    private final static int SEND_DOCUMENT_CAPTION_SIZE_LIMIT = 1024;
+
+    // Environment variable name for changelog substitution
+    private final static String ENV_VAR_CHANGELOG_NAME = "TELEGRAM_UPLOADER_CHANGELOG";
 
     private String chatId;
     private String caption;
@@ -195,7 +210,12 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         String expandedCaption = Util.fixEmptyAndTrim(this.caption);
         if (expandedCaption != null) {
             try {
-                expandedCaption = build.getEnvironment(listener).expand(expandedCaption);
+                EnvVars env = build.getEnvironment(listener);
+                expandedCaption = env.expand(expandedCaption);
+                int changeLogSizeLimit = SEND_DOCUMENT_CAPTION_SIZE_LIMIT - expandedCaption.length();
+                String changeLog = getChangeLog(build, changeLogSizeLimit);
+                env.addLine(ENV_VAR_CHANGELOG_NAME + "=" + changeLog);
+                expandedCaption = env.expand(expandedCaption);
             } catch (Exception e) {
                 doFailAction(logger, "Can't expand document caption '" + expandedCaption +
                         "': " + e.getMessage());
@@ -278,6 +298,33 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
     }
 
+    private ChangeLogSet<? extends Entry> getChangeSet(@Nonnull Run<?, ?> run) {
+        if (run instanceof AbstractBuild<?,?>) {
+            AbstractBuild<?,?> b = (AbstractBuild<?,?>) run;
+            return b.getChangeSet();
+        }
+        return ChangeLogSet.createEmpty(run);
+    }
+
+    private String getChangeLog(@Nonnull Run<?, ?> run, int sizeLimit) {
+        StringBuilder changeLog = new StringBuilder();
+        ChangeLogSet<? extends Entry> changeSet = getChangeSet(run);
+        for (Iterator<? extends ChangeLogSet.Entry> i = changeSet.iterator(); i.hasNext(); ) {
+            ChangeLogSet.Entry change = i.next();
+            String changeLogMessage = change.getMsg();
+            int n = changeLogMessage.indexOf('\n');
+            if (n > 0) {
+                changeLogMessage = changeLogMessage.substring(0, n).trim();
+            }
+            String changeLogLine = String.format("\n* %s: %s", change.getAuthor(), changeLogMessage);
+            if (changeLog.length() + changeLogLine.length() > sizeLimit) {
+                break;
+            }
+            changeLog.append(changeLogLine);
+        }
+        return changeLog.toString();
+    }
+
     private void doFailAction(PrintStream logger, String message) throws AbortException {
         if (this.failBuildIfUploadFailed) {
             throw new AbortException(message);
@@ -347,6 +394,9 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
         builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
 
+        Charset charset = Charset.forName("UTF-8");
+        builder.setCharset(charset);
+
         String text = String.format("[%s](%s) (%s)", Paths.get(link.getPath()).getFileName(),
                 link.toExternalForm(), Functions.humanReadableByteSize(size));
         if (linkCaption != null && !linkCaption.isEmpty()) {
@@ -355,7 +405,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
         builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
-        builder.addTextBody("text", text, ContentType.DEFAULT_BINARY);
+        builder.addTextBody("text", text, ContentType.TEXT_PLAIN.withCharset(charset));
         builder.addTextBody("disable_web_page_preview", "true", ContentType.DEFAULT_BINARY);
 
         if (this.silent) {
@@ -373,6 +423,9 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
         builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
 
+        Charset charset = Charset.forName("UTF-8");
+        builder.setCharset(charset);
+
         // Add parts to multipart request
         builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
 
@@ -381,7 +434,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         if (fileCaption != null && !fileCaption.isEmpty()) {
-            builder.addTextBody("caption", fileCaption, ContentType.DEFAULT_BINARY);
+            builder.addTextBody("caption", fileCaption, ContentType.TEXT_PLAIN.withCharset(charset));
         }
 
         builder.addBinaryBody("document", file, ContentType.DEFAULT_BINARY, file.getName());
