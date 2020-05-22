@@ -33,7 +33,10 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 
 import javax.annotation.Nonnull;
 
@@ -307,9 +310,9 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     }
 
     private String getChangeLog(@Nonnull Run<?, ?> run, int sizeLimit) {
-        StringBuilder changeLog = new StringBuilder();
         ChangeLogSet<? extends Entry> changeSet = getChangeSet(run);
-        for (Iterator<? extends ChangeLogSet.Entry> i = changeSet.iterator(); i.hasNext(); ) {
+        List<String> changeLogLines = new ArrayList<>();
+        for (Iterator<? extends ChangeLogSet.Entry> i = changeSet.iterator(); i.hasNext();) {
             ChangeLogSet.Entry change = i.next();
             String changeLogMessage = change.getMsg();
             int n = changeLogMessage.indexOf('\n');
@@ -317,10 +320,15 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                 changeLogMessage = changeLogMessage.substring(0, n).trim();
             }
             String changeLogLine = String.format("\n* %s: %s", change.getAuthor(), changeLogMessage);
+            changeLogLines.add(changeLogLine);
+        }
+        Collections.reverse(changeLogLines);
+        StringBuilder changeLog = new StringBuilder();
+        for (String changeLogLine : changeLogLines) {
             if (changeLog.length() + changeLogLine.length() > sizeLimit) {
                 break;
             }
-            changeLog.append(changeLogLine);
+            changeLog.insert(0, changeLogLine);
         }
         return changeLog.toString();
     }
