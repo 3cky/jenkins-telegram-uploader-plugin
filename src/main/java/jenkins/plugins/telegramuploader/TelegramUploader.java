@@ -310,6 +310,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         return ChangeLogSet.createEmpty(run);
     }
 
+    private static String escapeMarkdown(String str) {
+        return str.replace("_", "\\_")
+                .replace("*", "\\*")
+                .replace("[", "\\[")
+                .replace("`", "\\`");
+    }
+
     private String getChangeLog(@Nonnull Run<?, ?> run, int sizeLimit) {
         ChangeLogSet<? extends Entry> changeSet = getChangeSet(run);
         List<String> changeLogLines = new ArrayList<>();
@@ -320,8 +327,9 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             if (n > 0) {
                 changeLogMessage = changeLogMessage.substring(0, n).trim();
             }
-            String changeLogLine = String.format("\n* %s: %s", change.getAuthor(), changeLogMessage);
-            changeLogLines.add(changeLogLine);
+            String changeLogLine = String.format("\n* %s: %s", change.getAuthor().getDisplayName(),
+                    changeLogMessage);
+            changeLogLines.add(escapeMarkdown(changeLogLine));
         }
         Collections.reverse(changeLogLines);
         StringBuilder changeLog = new StringBuilder();
@@ -421,6 +429,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
+        builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
         builder.addTextBody("text", text, ContentType.TEXT_PLAIN.withCharset(charset));
         builder.addTextBody("disable_web_page_preview", "true", ContentType.DEFAULT_BINARY);
 
@@ -450,6 +459,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         if (fileCaption != null && !fileCaption.isEmpty()) {
+            builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
             builder.addTextBody("caption", fileCaption, ContentType.TEXT_PLAIN.withCharset(charset));
         }
 
