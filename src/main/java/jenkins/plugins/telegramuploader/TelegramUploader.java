@@ -421,7 +421,6 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
-        builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
         builder.addTextBody("text", text, ContentType.TEXT_PLAIN.withCharset(charset));
         builder.addTextBody("disable_web_page_preview", "true", ContentType.DEFAULT_BINARY);
 
