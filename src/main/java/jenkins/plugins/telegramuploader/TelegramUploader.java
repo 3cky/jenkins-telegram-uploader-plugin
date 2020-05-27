@@ -60,6 +60,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.jenkinsci.Symbol;
+import org.json.JSONException;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
@@ -366,14 +367,22 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             public String handleResponse(HttpResponse response)
                     throws ClientProtocolException, IOException {
                 int statusCode = response.getStatusLine().getStatusCode();
+                HttpEntity entity = response.getEntity();
+                String entityString = (entity != null) ? EntityUtils.toString(entity) : null;
                 if (statusCode >= 200 && statusCode < 300) {
-                    HttpEntity entity = response.getEntity();
-                    return entity != null ? EntityUtils.toString(entity) : null;
+                    return entityString;
                 }
                 String status = Integer.toString(statusCode);
-                String reason = response.getStatusLine().getReasonPhrase();
-                if (reason != null) {
-                    status += " (" + reason + ")";
+                if (entityString != null) {
+                    try {
+                        org.json.JSONObject result = new org.json.JSONObject(entityString);
+                        if (result.has("description")) {
+                            String errorDescription = result.getString("description");
+                            status += " (" + errorDescription + ")";
+                        }
+                    } catch (JSONException e) {
+                        // Do nothing
+                    }
                 }
                 throw new ClientProtocolException("Unexpected response status: " + status);
             }
