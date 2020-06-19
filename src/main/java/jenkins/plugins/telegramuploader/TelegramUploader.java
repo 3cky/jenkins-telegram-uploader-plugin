@@ -327,7 +327,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             if (n > 0) {
                 changeLogMessage = changeLogMessage.substring(0, n).trim();
             }
-            String changeLogLine = String.format("\n* %s: %s", change.getAuthor().getDisplayName(),
+            String changeLogLine = String.format("%n* %s: %s", change.getAuthor().getDisplayName(),
                     changeLogMessage);
             changeLogLines.add(escapeMarkdown(changeLogLine));
         }
@@ -428,13 +428,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             text += "\n\n" + linkCaption;
         }
 
-        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
-        builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
+        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_TEXT);
+        builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_TEXT);
         builder.addTextBody("text", text, ContentType.TEXT_PLAIN.withCharset(charset));
         builder.addTextBody("disable_web_page_preview", "true", ContentType.DEFAULT_BINARY);
 
         if (this.silent) {
-            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_BINARY);
+            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_TEXT);
         }
 
         HttpEntity data = builder.build();
@@ -452,14 +452,14 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         builder.setCharset(charset);
 
         // Add parts to multipart request
-        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_BINARY);
+        builder.addTextBody("chat_id", this.chatId, ContentType.DEFAULT_TEXT);
 
         if (this.silent) {
-            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_BINARY);
+            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_TEXT);
         }
 
         if (fileCaption != null && !fileCaption.isEmpty()) {
-            builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_BINARY);
+            builder.addTextBody("parse_mode", "Markdown", ContentType.DEFAULT_TEXT);
             builder.addTextBody("caption", fileCaption, ContentType.TEXT_PLAIN.withCharset(charset));
         }
 
