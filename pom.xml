@@ -26,7 +26,7 @@
 
     <name>Telegram Uploader Plugin</name>
     <description>A post-build uploader that uploads artifacts generated during build process to Telegram chats</description>
-    <url>https://github.org/3cky/${project.artifactId}-plugin</url>
+    <url>https://github.com/3cky/${project.artifactId}-plugin</url>
 
     <licenses>
         <license>
