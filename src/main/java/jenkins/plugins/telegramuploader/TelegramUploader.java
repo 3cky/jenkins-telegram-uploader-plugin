@@ -85,6 +85,7 @@ import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
 import hudson.tasks.Publisher;
 import hudson.util.FormValidation;
+import hudson.util.Secret;
 import jenkins.model.Jenkins;
 import jenkins.tasks.SimpleBuildStep;
 import jenkins.util.VirtualFile;
@@ -237,8 +238,11 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             return;
         }
 
+        String botToken = Secret.toString(descriptor.getBotToken());
+        String httpProxyPassword = Secret.toString(descriptor.getHttpProxyPassword());
+
         try (CloseableHttpClient httpClient = getHttpClient(httpProxy,
-                descriptor.getHttpProxyUser(), descriptor.getHttpProxyPassword())) {
+                descriptor.getHttpProxyUser(), httpProxyPassword)) {
             for (String artifact : artifacts) {
                 VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
                 // Check for Telegram upload file size limit (50 MB for now)
@@ -252,7 +256,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                                 + "' to Telegram chat " + this.chatId);
                         try {
                             String response = sendTelegramLink(httpClient, httpProxy,
-                                    descriptor.getBotToken(), expandedCaption, artifactUrl,
+                                    botToken, expandedCaption, artifactUrl,
                                     artifactVirtualFile.length());
                             if (!isTelegramResponseOk(response)) {
                                 doFailAction(logger, "Error while uploading artifact link '"
@@ -281,7 +285,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                             + this.chatId);
                     try {
                         String response = sendTelegramFile(httpClient, httpProxy,
-                                descriptor.getBotToken(), expandedCaption, artifactFile);
+                                botToken, expandedCaption, artifactFile);
                         if (!isTelegramResponseOk(response)) {
                             doFailAction(logger, "Error while uploading artifact '" + artifact
                                     + "' to Telegram chat " + this.chatId + ", response: " + response);
@@ -487,10 +491,10 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     @Symbol("telegramUploader")
     @Extension
     public static final class TelegramUploaderDescriptor extends BuildStepDescriptor<Publisher> {
-        private String botToken;
+        private Secret botToken;
         private String httpProxyUri;
         private String httpProxyUser;
-        private String httpProxyPassword;
+        private Secret httpProxyPassword;
 
         public TelegramUploaderDescriptor() {
             load();
@@ -536,10 +540,10 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         public FormValidation doTestConnection(
-                @QueryParameter("botToken") String token,
+                @QueryParameter("botToken") Secret token,
                 @QueryParameter("httpProxyUri") String proxyUri,
                 @QueryParameter("httpProxyUser") String proxyUser,
-                @QueryParameter("httpProxyPassword") String proxyPassword) throws IOException {
+                @QueryParameter("httpProxyPassword") Secret proxyPassword) throws IOException {
             final Jenkins jenkins = Jenkins.get();
             if (jenkins == null) {
                 throw new IOException("Jenkins instance is not ready");
@@ -547,7 +551,8 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             jenkins.checkPermission(Jenkins.ADMINISTER);
 
             try {
-                TelegramUploader.checkTelegramConnection(token, proxyUri, proxyUser, proxyPassword);
+                TelegramUploader.checkTelegramConnection(Secret.toString(token),
+                        proxyUri, proxyUser, Secret.toString(proxyPassword));
             } catch (Exception e) {
                 return FormValidation.errorWithMarkup("<p>Can't connect to Telegram!</p><pre>" +
                         Util.escape(Functions.printThrowable(e)) + "</pre>");
@@ -559,15 +564,15 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         @Override
         public boolean configure(StaplerRequest req, JSONObject json) throws FormException {
             JSONObject config = json.getJSONObject("telegram-uploader");
-            this.botToken = config.getString("botToken");
+            this.botToken = Secret.fromString(config.getString("botToken"));
             this.httpProxyUri = config.getString("httpProxyUri");
             this.httpProxyUser = config.getString("httpProxyUser");
-            this.httpProxyPassword = config.getString("httpProxyPassword");
+            this.httpProxyPassword = Secret.fromString(config.getString("httpProxyPassword"));
             save();
             return true;
         }
 
-        public String getBotToken() {
+        public Secret getBotToken() {
             return botToken;
         }
 
@@ -579,7 +584,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             return httpProxyUser;
         }
 
-        public String getHttpProxyPassword() {
+        public Secret getHttpProxyPassword() {
             return httpProxyPassword;
         }
     }
