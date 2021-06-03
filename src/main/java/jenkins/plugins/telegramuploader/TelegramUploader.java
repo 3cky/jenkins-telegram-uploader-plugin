@@ -36,6 +36,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 
 import javax.annotation.Nonnull;
@@ -306,12 +307,21 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
     }
 
-    private ChangeLogSet<? extends Entry> getChangeSet(@Nonnull Run<?, ?> run) {
+    // Get all changesets from last successful build
+    private List<ChangeLogSet<? extends Entry>> getChangeSets(@Nonnull Run<?, ?> run) {
+        List<ChangeLogSet<? extends Entry>> result = new LinkedList<>();
         if (run instanceof AbstractBuild<?,?>) {
             AbstractBuild<?,?> b = (AbstractBuild<?,?>) run;
-            return b.getChangeSet();
+            Result r;
+            do {
+                ChangeLogSet<? extends Entry> changeLogSet = b.getChangeSet();
+                result.add(0, changeLogSet);
+                b = b.getPreviousBuild();
+                r = (b != null) ? b.getResult() : null;
+            } while (b != null && r != null && r.isWorseThan(Result.SUCCESS));
+            return result;
         }
-        return ChangeLogSet.createEmpty(run);
+        return Collections.emptyList();
     }
 
     private static String escapeMarkdown(String str) {
@@ -322,18 +332,19 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     }
 
     private String getChangeLog(@Nonnull Run<?, ?> run, int sizeLimit) {
-        ChangeLogSet<? extends Entry> changeSet = getChangeSet(run);
         List<String> changeLogLines = new ArrayList<>();
-        for (Iterator<? extends ChangeLogSet.Entry> i = changeSet.iterator(); i.hasNext();) {
-            ChangeLogSet.Entry change = i.next();
-            String changeLogMessage = change.getMsg();
-            int n = changeLogMessage.indexOf('\n');
-            if (n > 0) {
-                changeLogMessage = changeLogMessage.substring(0, n).trim();
+        for (ChangeLogSet<? extends Entry> changeSet : getChangeSets(run)) {
+            for (Iterator<? extends ChangeLogSet.Entry> i = changeSet.iterator(); i.hasNext();) {
+                ChangeLogSet.Entry change = i.next();
+                String changeLogMessage = change.getMsg();
+                int n = changeLogMessage.indexOf('\n');
+                if (n > 0) {
+                    changeLogMessage = changeLogMessage.substring(0, n).trim();
+                }
+                String changeLogLine = String.format("%n* %s: %s",
+                        change.getAuthor().getDisplayName(), changeLogMessage);
+                changeLogLines.add(escapeMarkdown(changeLogLine));
             }
-            String changeLogLine = String.format("%n* %s: %s", change.getAuthor().getDisplayName(),
-                    changeLogMessage);
-            changeLogLines.add(escapeMarkdown(changeLogLine));
         }
         Collections.reverse(changeLogLines);
         StringBuilder changeLog = new StringBuilder();
