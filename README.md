@@ -20,7 +20,7 @@ A Jenkins post-build uploader plugin that uploads artifacts generated during bui
 ```
 archiveArtifacts artifacts: 'output/*.apk'
 
-telegramUploader chatId: '87654321', filter: 'output/*.apk', caption: "Job '${env.JOB_NAME}", silent: true, failBuildIfUploadFailed: false
+telegramUploader chatId: '87654321', forwardChatIds: '-12345678', filter: 'output/*.apk', caption: "Job '${env.JOB_NAME}", silent: true, failBuildIfUploadFailed: false
 ```
 
 ### About the Telegram chat IDs

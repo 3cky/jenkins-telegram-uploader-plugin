@@ -61,7 +61,6 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.jenkinsci.Symbol;
-import org.json.JSONException;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
@@ -90,6 +89,7 @@ import hudson.util.Secret;
 import jenkins.model.Jenkins;
 import jenkins.tasks.SimpleBuildStep;
 import jenkins.util.VirtualFile;
+import net.sf.json.JSONException;
 import net.sf.json.JSONObject;
 
 /**
@@ -108,6 +108,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     private final static String ENV_VAR_CHANGELOG_NAME = "TELEGRAM_UPLOADER_CHANGELOG";
 
     private String chatId;
+    private String forwardChatIds;
     private String caption;
     private String filter;
     private boolean silent;
@@ -126,6 +127,15 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
     public void setChatId(String chatId) {
         this.chatId = chatId;
+    }
+
+    public String getForwardChatIds() {
+        return forwardChatIds;
+    }
+
+    @DataBoundSetter
+    public void setForwardChatIds(String forwardChatIds) {
+        this.forwardChatIds = forwardChatIds;
     }
 
     public String getFilter() {
@@ -245,6 +255,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         try (CloseableHttpClient httpClient = getHttpClient(httpProxy,
                 descriptor.getHttpProxyUser(), httpProxyPassword)) {
             for (String artifact : artifacts) {
+                JSONObject telegramResponse = null;
                 VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
                 // Check for Telegram upload file size limit (50 MB for now)
                 if (artifactVirtualFile.length() > SEND_FILE_SIZE_LIMIT) {
@@ -256,13 +267,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                         logger.println("Uploading artifact link '" + artifactUrl
                                 + "' to Telegram chat " + this.chatId);
                         try {
-                            String response = sendTelegramLink(httpClient, httpProxy,
+                            telegramResponse = sendTelegramLink(httpClient, httpProxy,
                                     botToken, expandedCaption, artifactUrl,
                                     artifactVirtualFile.length());
-                            if (!isTelegramResponseOk(response)) {
+                            if (!isTelegramResponseOk(telegramResponse)) {
                                 doFailAction(logger, "Error while uploading artifact link '"
                                         + artifactUrl + "' to Telegram chat " + this.chatId
-                                        + ", response: " + response);
+                                        + getTelegramErrorMessage(telegramResponse));
                                 continue;
                             }
                         } catch (AbortException ae) {
@@ -285,11 +296,12 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                     logger.println("Uploading artifact '" + artifact + "' to the Telegram chat "
                             + this.chatId);
                     try {
-                        String response = sendTelegramFile(httpClient, httpProxy,
+                        telegramResponse = sendTelegramFile(httpClient, httpProxy,
                                 botToken, expandedCaption, artifactFile);
-                        if (!isTelegramResponseOk(response)) {
+                        if (!isTelegramResponseOk(telegramResponse)) {
                             doFailAction(logger, "Error while uploading artifact '" + artifact
-                                    + "' to Telegram chat " + this.chatId + ", response: " + response);
+                                    + "' to Telegram chat " + this.chatId
+                                    + getTelegramErrorMessage(telegramResponse));
                             continue;
                         }
                     } catch (AbortException ae) {
@@ -297,6 +309,49 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                     } catch (Exception e) {
                         doFailAction(logger, "Can't upload artifact '" + artifactFile
                                 + "' to Telegram chat " + this.chatId + ": " + e.getMessage());
+                    }
+                }
+                if (this.forwardChatIds == null) {
+                    continue;
+                }
+                if (telegramResponse == null) {
+                    logger.println("Skip forwarding uploaded artifact because "
+                            + "Telegram response is null");
+                    continue;
+                }
+                JSONObject result = (JSONObject) telegramResponse.opt("result");
+                if (result == null) {
+                    logger.println("Skip forwarding uploaded artifact because "
+                            + "no result was found in Telegram response");
+                    continue;
+                }
+                int messageId = result.optInt("message_id", -1);
+                if (messageId < 0) {
+                    logger.println("Skip forwarding uploaded artifact because "
+                            + "no message ID was found in Telegram response");
+                    continue;
+                }
+                String[] forwardChatIds = this.forwardChatIds.split(",");
+                for (String forwardChatId : forwardChatIds) {
+                    forwardChatId = forwardChatId.trim();
+                    if (forwardChatId.isEmpty()) {
+                        continue;
+                    }
+                    logger.println("Forwarding artifact '" + artifact
+                            + "' to Telegram chat " + forwardChatId);
+                    try {
+                        telegramResponse = forwardTelegramMessage(httpClient, httpProxy, botToken,
+                                messageId, forwardChatId);
+                        if (!isTelegramResponseOk(telegramResponse)) {
+                            doFailAction(logger, "Error while forwarding artifact '" + artifact
+                                    + "' to Telegram chat " + forwardChatId
+                                    + getTelegramErrorMessage(telegramResponse));
+                        }
+                    } catch (AbortException ae) {
+                        throw ae;
+                    } catch (Exception e) {
+                        doFailAction(logger, "Can't forward artifact '" + artifact
+                                + "' to Telegram chat " + forwardChatId + ": " + e.getMessage());
                     }
                 }
             }
@@ -384,39 +439,43 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         return HttpClients.custom().setDefaultCredentialsProvider(httpProxyCredsProvider).build();
     }
 
-    private static ResponseHandler<String> getHttpResponseHandler() {
-        return new ResponseHandler<String>() {
+    private static ResponseHandler<JSONObject> getTelegramResponseHandler() {
+        return new ResponseHandler<JSONObject>() {
             @Override
-            public String handleResponse(HttpResponse response)
+            public JSONObject handleResponse(HttpResponse response)
                     throws ClientProtocolException, IOException {
-                int statusCode = response.getStatusLine().getStatusCode();
+                JSONObject result = null;
                 HttpEntity entity = response.getEntity();
                 String entityString = (entity != null) ? EntityUtils.toString(entity) : null;
-                if (statusCode >= 200 && statusCode < 300) {
-                    return entityString;
+                try {
+                    result = JSONObject.fromObject(entityString);
+                } catch (JSONException e) {
+                    // Do nothing
                 }
-                String status = Integer.toString(statusCode);
-                if (entityString != null) {
-                    try {
-                        org.json.JSONObject result = new org.json.JSONObject(entityString);
-                        if (result.has("description")) {
-                            String errorDescription = result.getString("description");
-                            status += " (" + errorDescription + ")";
-                        }
-                    } catch (JSONException e) {
-                        // Do nothing
-                    }
+                int statusCode = response.getStatusLine().getStatusCode();
+                if (statusCode < 200 || statusCode > 299) {
+                    throw new ClientProtocolException("Unexpected response status: "
+                            + statusCode + getTelegramErrorMessage(result));
                 }
-                throw new ClientProtocolException("Unexpected response status: " + status);
+                return result;
             }
         };
     }
 
-    private static boolean isTelegramResponseOk(String response) {
-        return response.indexOf("\"ok\":true") >= 0;
+    static boolean isTelegramResponseOk(JSONObject response) {
+        return response != null && response.optBoolean("ok");
     }
 
-    private static String sendTelegramRequest(HttpClient httpClient, HttpHost httpProxy,
+    static String getTelegramErrorDescription(JSONObject response) {
+        return (response != null) ? response.optString("description", null) : null;
+    }
+
+    static String getTelegramErrorMessage(JSONObject response) {
+        String errorDescription = getTelegramErrorDescription(response);
+        return (errorDescription != null) ? " (" + errorDescription + ")" : "";
+    }
+
+    private static JSONObject sendTelegramRequest(HttpClient httpClient, HttpHost httpProxy,
             String botToken, String botMethod, HttpEntity botData) throws IOException {
         RequestConfig requestConfig = (httpProxy == null) ? RequestConfig.DEFAULT :
             RequestConfig.custom().setProxy(httpProxy).build();
@@ -425,10 +484,10 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                 .setEntity(botData)
                 .setConfig(requestConfig)
                 .build();
-        return httpClient.execute(request, getHttpResponseHandler());
+        return httpClient.execute(request, getTelegramResponseHandler());
     }
 
-    public String sendTelegramLink(HttpClient httpClient, HttpHost httpProxy,
+    public JSONObject sendTelegramLink(HttpClient httpClient, HttpHost httpProxy,
             String botToken, String linkCaption, URL link, long size)
                     throws IOException {
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
@@ -457,7 +516,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         return sendTelegramRequest(httpClient, httpProxy, botToken, "sendMessage", data);
     }
 
-    public String sendTelegramFile(HttpClient httpClient, HttpHost httpProxy,
+    public JSONObject sendTelegramFile(HttpClient httpClient, HttpHost httpProxy,
             String botToken, String fileCaption, File file) throws IOException {
         // Build multipart upload request
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
@@ -491,12 +550,33 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         HttpHost httpProxy = getHttpProxy(httpProxyUri);
         try (CloseableHttpClient httpClient = getHttpClient(httpProxy,
                 httpProxyUser, httpProxyPassword)) {
-            String response = sendTelegramRequest(httpClient, httpProxy,
+            JSONObject response = sendTelegramRequest(httpClient, httpProxy,
                     botToken, "getUpdates", null);
             if (!isTelegramResponseOk(response)) {
-                throw new ClientProtocolException(response);
+                throw new ClientProtocolException(getTelegramErrorDescription(response));
             }
         }
+    }
+
+    public JSONObject forwardTelegramMessage(HttpClient httpClient, HttpHost httpProxy,
+            String botToken, int messageId, String forwardChatId) throws IOException {
+        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+        builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+
+        Charset charset = Charset.forName("UTF-8");
+        builder.setCharset(charset);
+
+        builder.addTextBody("from_chat_id", this.chatId, ContentType.DEFAULT_TEXT);
+        builder.addTextBody("chat_id", forwardChatId, ContentType.DEFAULT_TEXT);
+        builder.addTextBody("message_id", Integer.toString(messageId), ContentType.DEFAULT_TEXT);
+
+        if (this.silent) {
+            builder.addTextBody("disable_notification", "true", ContentType.DEFAULT_TEXT);
+        }
+
+        HttpEntity data = builder.build();
+
+        return sendTelegramRequest(httpClient, httpProxy, botToken, "forwardMessage", data);
     }
 
     @Symbol("telegramUploader")

@@ -3,7 +3,11 @@
          xmlns:st="jelly:stapler"
          xmlns:f="/lib/form">
 
-    <f:entry title="Chat ID" field="chatId">
+    <f:entry title="Chat to upload" field="chatId">
+        <f:textbox />
+    </f:entry>
+
+    <f:entry title="Chats to forward" field="forwardChatIds">
         <f:textbox />
     </f:entry>
 
