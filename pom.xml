@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>plugin</artifactId>
-        <version>4.15</version>
+        <version>4.56</version>
         <relativePath />
     </parent>
 
@@ -14,14 +14,13 @@
     <packaging>hpi</packaging>
 
     <properties>
-        <jenkins.version>2.272</jenkins.version>
+        <jenkins.version>2.361.4</jenkins.version>
+        <hpi.compatibleSinceVersion>2.32</hpi.compatibleSinceVersion>
         <java.level>8</java.level>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <httpclient.version>4.5.10-1.0</httpclient.version>
-        <json.version>20200518</json.version>
-        <workflow.version>1.11</workflow.version>
-        <workflow-step-api-plugin.version>2.21</workflow-step-api-plugin.version>
+        <httpclient.version>4.5.14-150.v7a_b_9d17134a_5</httpclient.version>
+        <json.version>20230227</json.version>
     </properties>
 
     <name>Telegram Uploader Plugin</name>
