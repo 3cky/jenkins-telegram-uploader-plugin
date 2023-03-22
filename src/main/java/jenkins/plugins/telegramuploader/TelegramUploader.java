@@ -96,9 +96,16 @@ import net.sf.json.JSONObject;
  * @author Victor Antonovich (v.antonovich@gmail.com)
  */
 public class TelegramUploader extends Notifier implements SimpleBuildStep {
-    // 50 MB file size limit for sendDocument bot method
+    // Telegram Bot API server URI
+    private final static String TELEGRAM_BOT_API_SERVER_URI = "https://api.telegram.org";
+
+    // sendDocument file size limit for the Telegram cloud Bot API server
     // (https://core.telegram.org/bots/api#sending-files)
-    private final static long SEND_FILE_SIZE_LIMIT = 50 * 1024 * 1024;
+    private final static long TELEGRAM_BOT_API_SERVER_SEND_FILE_SIZE_LIMIT = 50 * 1024 * 1024;
+
+    // sendDocument file size limit for the local Bot API server
+    // (https://core.telegram.org/bots/api#using-a-local-bot-api-server)
+    private final static long LOCAL_BOT_API_SERVER_SEND_FILE_SIZE_LIMIT = 2000 * 1024 * 1024;
 
     // sendDocument method document caption size limit
     // (https://core.telegram.org/bots/api#senddocument)
@@ -241,6 +248,8 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         TelegramUploaderDescriptor descriptor = getDescriptor();
 
+        String botApiServerUri = resolveBotApiServerUri(descriptor.getBotApiServerUri());
+
         HttpHost httpProxy = null;
         try {
             httpProxy = getHttpProxy(descriptor.getHttpProxyUri());
@@ -257,8 +266,11 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             for (String artifact : artifacts) {
                 JSONObject telegramResponse = null;
                 VirtualFile artifactVirtualFile = artifactsRoot.child(artifact);
-                // Check for Telegram upload file size limit (50 MB for now)
-                if (artifactVirtualFile.length() > SEND_FILE_SIZE_LIMIT) {
+                // Check for Telegram upload file size limit
+                long sendFileSizeLimit = isTelegramBotApiServerUri(botApiServerUri)
+                        ? TELEGRAM_BOT_API_SERVER_SEND_FILE_SIZE_LIMIT
+                                : LOCAL_BOT_API_SERVER_SEND_FILE_SIZE_LIMIT;
+                if (artifactVirtualFile.length() > sendFileSizeLimit) {
                     // Choose action for file exceeded this limit
                     if (sendLinkIfUploadSizeLimitExceeded) {
                         // Send link to the artifact instead of file itself
@@ -268,7 +280,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                                 + "' to Telegram chat " + this.chatId);
                         try {
                             telegramResponse = sendTelegramLink(httpClient, httpProxy,
-                                    botToken, expandedCaption, artifactUrl,
+                                    botApiServerUri, botToken, expandedCaption, artifactUrl,
                                     artifactVirtualFile.length());
                             if (!isTelegramResponseOk(telegramResponse)) {
                                 doFailAction(logger, "Error while uploading artifact link '"
@@ -288,7 +300,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                                 + "' to the Telegram: file is too big: "
                                 + Functions.humanReadableByteSize(artifactVirtualFile.length())
                                 + ", upload file size limit is: "
-                                + Functions.humanReadableByteSize(SEND_FILE_SIZE_LIMIT));
+                                + Functions.humanReadableByteSize(sendFileSizeLimit));
                         continue;
                     }
                 } else {
@@ -297,7 +309,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                             + this.chatId);
                     try {
                         telegramResponse = sendTelegramFile(httpClient, httpProxy,
-                                botToken, expandedCaption, artifactFile);
+                                botApiServerUri, botToken, expandedCaption, artifactFile);
                         if (!isTelegramResponseOk(telegramResponse)) {
                             doFailAction(logger, "Error while uploading artifact '" + artifact
                                     + "' to Telegram chat " + this.chatId
@@ -340,8 +352,8 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
                     logger.println("Forwarding artifact '" + artifact
                             + "' to Telegram chat " + forwardChatId);
                     try {
-                        telegramResponse = forwardTelegramMessage(httpClient, httpProxy, botToken,
-                                messageId, forwardChatId);
+                        telegramResponse = forwardTelegramMessage(httpClient, httpProxy,
+                                botApiServerUri, botToken, messageId, forwardChatId);
                         if (!isTelegramResponseOk(telegramResponse)) {
                             doFailAction(logger, "Error while forwarding artifact '" + artifact
                                     + "' to Telegram chat " + forwardChatId
@@ -476,10 +488,11 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
     }
 
     private static JSONObject sendTelegramRequest(HttpClient httpClient, HttpHost httpProxy,
-            String botToken, String botMethod, HttpEntity botData) throws IOException {
+            String botApiServerUri, String botToken, String botMethod, HttpEntity botData)
+                    throws IOException {
         RequestConfig requestConfig = (httpProxy == null) ? RequestConfig.DEFAULT :
             RequestConfig.custom().setProxy(httpProxy).build();
-        String requestUri = String.format("https://api.telegram.org/bot%s/%s", botToken, botMethod);
+        String requestUri = String.format("%s/bot%s/%s", botApiServerUri, botToken, botMethod);
         HttpUriRequest request = RequestBuilder.post(requestUri)
                 .setEntity(botData)
                 .setConfig(requestConfig)
@@ -487,8 +500,22 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         return httpClient.execute(request, getTelegramResponseHandler());
     }
 
+    private static void sendTelegramRequest(String botApiServerUri, String botToken,
+            String httpProxyUri, String httpProxyUser, String httpProxyPassword,
+            String botMethod) throws ClientProtocolException, IOException {
+        HttpHost httpProxy = getHttpProxy(httpProxyUri);
+        try (CloseableHttpClient httpClient = getHttpClient(httpProxy,
+                httpProxyUser, httpProxyPassword)) {
+            JSONObject response = sendTelegramRequest(httpClient, httpProxy,
+                    resolveBotApiServerUri(botApiServerUri), botToken, botMethod, null);
+            if (!isTelegramResponseOk(response)) {
+                throw new ClientProtocolException(getTelegramErrorDescription(response));
+            }
+        }
+    }
+
     public JSONObject sendTelegramLink(HttpClient httpClient, HttpHost httpProxy,
-            String botToken, String linkCaption, URL link, long size)
+            String botApiServerUri, String botToken, String linkCaption, URL link, long size)
                     throws IOException {
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
         builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
@@ -513,11 +540,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         HttpEntity data = builder.build();
 
-        return sendTelegramRequest(httpClient, httpProxy, botToken, "sendMessage", data);
+        return sendTelegramRequest(httpClient, httpProxy, botApiServerUri, botToken,
+                "sendMessage", data);
     }
 
     public JSONObject sendTelegramFile(HttpClient httpClient, HttpHost httpProxy,
-            String botToken, String fileCaption, File file) throws IOException {
+            String botApiServerUri, String botToken, String fileCaption, File file)
+                    throws IOException {
         // Build multipart upload request
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
         builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
@@ -541,25 +570,13 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         HttpEntity data = builder.build();
 
-        return sendTelegramRequest(httpClient, httpProxy, botToken, "sendDocument", data);
-    }
-
-    public static void checkTelegramConnection(String botToken, String httpProxyUri,
-            String httpProxyUser, String httpProxyPassword)
-                    throws ClientProtocolException, IOException {
-        HttpHost httpProxy = getHttpProxy(httpProxyUri);
-        try (CloseableHttpClient httpClient = getHttpClient(httpProxy,
-                httpProxyUser, httpProxyPassword)) {
-            JSONObject response = sendTelegramRequest(httpClient, httpProxy,
-                    botToken, "getUpdates", null);
-            if (!isTelegramResponseOk(response)) {
-                throw new ClientProtocolException(getTelegramErrorDescription(response));
-            }
-        }
+        return sendTelegramRequest(httpClient, httpProxy, botApiServerUri, botToken,
+                "sendDocument", data);
     }
 
     public JSONObject forwardTelegramMessage(HttpClient httpClient, HttpHost httpProxy,
-            String botToken, int messageId, String forwardChatId) throws IOException {
+            String botApiServerUri, String botToken, int messageId, String forwardChatId)
+                    throws IOException {
         MultipartEntityBuilder builder = MultipartEntityBuilder.create();
         builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
 
@@ -576,12 +593,38 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         HttpEntity data = builder.build();
 
-        return sendTelegramRequest(httpClient, httpProxy, botToken, "forwardMessage", data);
+        return sendTelegramRequest(httpClient, httpProxy, botApiServerUri, botToken,
+                "forwardMessage", data);
+    }
+
+    public static void checkTelegramConnection(String botApiServerUri, String botToken,
+            String httpProxyUri, String httpProxyUser, String httpProxyPassword)
+                    throws ClientProtocolException, IOException {
+        sendTelegramRequest(botApiServerUri, botToken, httpProxyUri, httpProxyUser,
+                httpProxyPassword, "getUpdates");
+    }
+
+    public static void logOutFromBotApiServer(String botApiServerUri, String botToken,
+            String httpProxyUri, String httpProxyUser, String httpProxyPassword)
+                    throws ClientProtocolException, IOException {
+        sendTelegramRequest(botApiServerUri, botToken, httpProxyUri, httpProxyUser,
+                httpProxyPassword, "logOut");
+    }
+
+    private static boolean isTelegramBotApiServerUri(String botApiServerUri) {
+        return URI.create(TELEGRAM_BOT_API_SERVER_URI).equals(URI.create(botApiServerUri));
+    }
+
+    private static String resolveBotApiServerUri(String botApiServerUri) {
+        String resolvedBotApiServerUri = Util.fixEmptyAndTrim(botApiServerUri);
+        return (resolvedBotApiServerUri != null) ? resolvedBotApiServerUri
+                : TELEGRAM_BOT_API_SERVER_URI;
     }
 
     @Symbol("telegramUploader")
     @Extension
     public static final class TelegramUploaderDescriptor extends BuildStepDescriptor<Publisher> {
+        private String botApiServerUri;
         private Secret botToken;
         private String httpProxyUri;
         private String httpProxyUser;
@@ -610,6 +653,23 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             return FormValidation.ok();
         }
 
+        public FormValidation doCheckBotApiServerUri(@QueryParameter String value) {
+            if (!value.isEmpty()) {
+                URI uri;
+                try {
+                    uri = new URI(value);
+                } catch (Exception e) {
+                    return FormValidation.error("Invalid Bot API server URI: %s", e.getMessage());
+                }
+                if (!uri.isAbsolute()) {
+                    return FormValidation.error("Bot API server URI must be absolute");
+                }
+            }
+
+            return FormValidation.ok();
+        }
+
+
         public FormValidation doCheckBotToken(@QueryParameter String value) {
             if (value.isEmpty()) {
                 return FormValidation.error("Bot token must not be empty");
@@ -620,10 +680,14 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
 
         public FormValidation doCheckHttpProxyUri(@QueryParameter String value) {
             if (!value.isEmpty()) {
+                URI uri;
                 try {
-                    URI.create(value);
+                    uri = new URI(value);
                 } catch (Exception e) {
                     return FormValidation.error("Invalid HTTP proxy URI: %s", e.getMessage());
+                }
+                if (!uri.isAbsolute()) {
+                    return FormValidation.error("HTTP proxy URI must be absolute");
                 }
             }
 
@@ -631,6 +695,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
         }
 
         public FormValidation doTestConnection(
+                @QueryParameter("botApiServerUri") String botApiServerUri,
                 @QueryParameter("botToken") Secret token,
                 @QueryParameter("httpProxyUri") String proxyUri,
                 @QueryParameter("httpProxyUser") String proxyUser,
@@ -642,7 +707,7 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             jenkins.checkPermission(Jenkins.ADMINISTER);
 
             try {
-                TelegramUploader.checkTelegramConnection(Secret.toString(token),
+                TelegramUploader.checkTelegramConnection(botApiServerUri, Secret.toString(token),
                         proxyUri, proxyUser, Secret.toString(proxyPassword));
             } catch (Exception e) {
                 return FormValidation.errorWithMarkup("<p>Can't connect to Telegram!</p><pre>" +
@@ -652,15 +717,43 @@ public class TelegramUploader extends Notifier implements SimpleBuildStep {
             return FormValidation.ok("Successfully connected to Telegram!");
         }
 
+        public FormValidation doLogOut(
+                @QueryParameter("botApiServerUri") String botApiServerUri,
+                @QueryParameter("botToken") Secret token,
+                @QueryParameter("httpProxyUri") String proxyUri,
+                @QueryParameter("httpProxyUser") String proxyUser,
+                @QueryParameter("httpProxyPassword") Secret proxyPassword) throws IOException {
+            final Jenkins jenkins = Jenkins.get();
+            if (jenkins == null) {
+                throw new IOException("Jenkins instance is not ready");
+            }
+            jenkins.checkPermission(Jenkins.ADMINISTER);
+
+            try {
+                TelegramUploader.logOutFromBotApiServer(botApiServerUri, Secret.toString(token),
+                        proxyUri, proxyUser, Secret.toString(proxyPassword));
+            } catch (Exception e) {
+                return FormValidation.errorWithMarkup("<p>Can't log out from Bot API server!</p><pre>" +
+                        Util.escape(Functions.printThrowable(e)) + "</pre>");
+            }
+
+            return FormValidation.ok("Successfully logged out from Bot API server!");
+        }
+
         @Override
         public boolean configure(StaplerRequest req, JSONObject json) throws FormException {
             JSONObject config = json.getJSONObject("telegram-uploader");
+            this.botApiServerUri = config.getString("botApiServerUri");
             this.botToken = Secret.fromString(config.getString("botToken"));
             this.httpProxyUri = config.getString("httpProxyUri");
             this.httpProxyUser = config.getString("httpProxyUser");
             this.httpProxyPassword = Secret.fromString(config.getString("httpProxyPassword"));
             save();
             return true;
+        }
+
+        public String getBotApiServerUri() {
+            return botApiServerUri;
         }
 
         public Secret getBotToken() {

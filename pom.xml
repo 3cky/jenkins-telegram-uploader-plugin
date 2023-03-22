@@ -16,7 +16,6 @@
     <properties>
         <jenkins.version>2.361.4</jenkins.version>
         <hpi.compatibleSinceVersion>2.32</hpi.compatibleSinceVersion>
-        <java.level>8</java.level>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <httpclient.version>4.5.14-150.v7a_b_9d17134a_5</httpclient.version>

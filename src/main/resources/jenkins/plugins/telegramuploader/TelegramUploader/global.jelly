@@ -10,6 +10,10 @@
 
     <f:advanced>
 
+        <f:entry title="Bot API Server URI" field="botApiServerUri">
+          <f:textbox />
+        </f:entry>
+
         <f:entry title="HTTP Proxy URI" field="httpProxyUri">
           <f:textbox />
         </f:entry>
@@ -23,7 +27,10 @@
         </f:entry>
 
         <f:validateButton method="testConnection" title="Test Connection"
-            with="botToken,httpProxyUri,httpProxyUser,httpProxyPassword" />
+            with="botApiServerUri,botToken,httpProxyUri,httpProxyUser,httpProxyPassword" />
+
+        <f:validateButton method="logOut" title="Log Out"
+            with="botApiServerUri,botToken,httpProxyUri,httpProxyUser,httpProxyPassword" />
 
     </f:advanced>
 
