@@ -19,7 +19,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <httpclient.version>4.5.14-150.v7a_b_9d17134a_5</httpclient.version>
-        <json.version>20230227</json.version>
+        <json.version>20231013</json.version>
     </properties>
 
     <name>Telegram Uploader Plugin</name>
